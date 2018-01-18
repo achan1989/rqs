@@ -2,6 +2,7 @@ mod game;
 mod parms;
 mod quakedef;
 mod time;
+mod cmd;
 
 
 fn main() {
