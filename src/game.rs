@@ -42,4 +42,13 @@ impl Game {
             unimplemented!("dedicated server printf");
         }
     }
+
+    fn make_self_ref(&self) -> Box<Fn() -> &'static Self> {
+        let p_game: *const Game = self;
+        Box::new(move || {
+            unsafe {
+                &*p_game
+            }
+        })
+    }
 }

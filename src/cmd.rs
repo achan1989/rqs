@@ -1,7 +1,8 @@
-use std;
+use game;
 
 
 pub struct Cmd {
+    game: Box<Fn() -> &'static game::Game>,
     cmd_text: String,
     wait: bool
 }
@@ -15,8 +16,9 @@ pub enum CmdSource {
 }
 
 impl Cmd {
-    pub fn new() -> Self {
+    pub fn new(game: Box<Fn() -> &'static game::Game>) -> Self {
         Cmd {
+            game,
             cmd_text: String::with_capacity(8000),
             wait: false
         }
@@ -76,10 +78,16 @@ impl Cmd {
 
 mod test {
     use super:: Cmd;
+    use game;
+
+    #[cfg(test)]
+    fn dummy_game_ref() -> Box<Fn() -> &'static game::Game> {
+        Box::new(|| panic!("dummy, not supposed to be used") )
+    }
 
     #[test]
     fn buf_basic() {
-        let mut cmd = Cmd::new();
+        let mut cmd = Cmd::new(dummy_game_ref());
 
         cmd.buf_add_text("First cmd;");
         cmd.buf_add_text("Second cmd;");
@@ -90,7 +98,7 @@ mod test {
 
     #[test]
     fn execute_basic() {
-        let mut cmd = Cmd::new();
+        let mut cmd = Cmd::new(dummy_game_ref());
 
         cmd.buf_add_text("First cmd;");
         cmd.buf_add_text("Second cmd\n");
@@ -102,7 +110,7 @@ mod test {
 
     #[test]
     fn execute_wait() {
-        let mut cmd = Cmd::new();
+        let mut cmd = Cmd::new(dummy_game_ref());
 
         cmd.buf_add_text("First cmd;");
         cmd.buf_add_text("Second cmd\n");
@@ -119,7 +127,7 @@ mod test {
 
     #[test]
     fn execute_escape() {
-        let mut cmd = Cmd::new();
+        let mut cmd = Cmd::new(dummy_game_ref());
 
         cmd.buf_add_text(r#"First "cmd";"#);
         cmd.buf_add_text(r#"Second "cmd;" thing;"#);
