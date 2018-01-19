@@ -4,7 +4,13 @@ use game;
 pub struct Cmd {
     game: Box<Fn() -> &'static game::Game>,
     cmd_text: String,
+    cmd_functions: Vec<CmdFunction>,
     wait: bool
+}
+
+pub struct CmdFunction {
+    name: &'static str,
+    function: XCommand
 }
 
 #[derive(Debug)]
@@ -15,13 +21,28 @@ pub enum CmdSource {
     CmdBuf
 }
 
+type XCommand = Box< Fn() -> ()>;
+
 impl Cmd {
     pub fn new(game: Box<Fn() -> &'static game::Game>) -> Self {
-        Cmd {
+        let cmd = Cmd {
             game,
             cmd_text: String::with_capacity(8000),
+            cmd_functions: Vec::with_capacity(10),
             wait: false
-        }
+        };
+        // cmd.add_basic_commands();
+        cmd
+    }
+
+    fn add_basic_commands(&mut self) {
+        unimplemented!("add basic commands");
+        // self.add_command("stuffcmds", stuffcmds_fn);
+        // self.add_command("exec", exec_fn);
+        // self.add_command("echo", echo_fn);
+        // self.add_command("alias", alias_fn);
+        // self.add_command("cmd", forward_to_server_fn);
+        // self.add_command("wait", wait_fn);
     }
 
     // Add text to the end of the buffer.
@@ -38,6 +59,7 @@ impl Cmd {
         while !self.cmd_text.is_empty() {
             let mut line = String::with_capacity(200);
             let mut quotes = 0;
+            // Find a '\n' or ';' line break, unless it's a ';' inside a quote.
             for c in self.cmd_text.chars() {
                 if c == '"' {
                     quotes += 1;
@@ -72,7 +94,55 @@ impl Cmd {
 
     pub fn execute_string(&self, s: String, src: CmdSource) {
         println!("Execute from {:?}: {:?}", src, s);
+        //unimplemented!();
     }
+
+    pub fn add_command(&mut self, name: &'static str, function: XCommand) {
+        let game = (self.game)();
+
+        if is_host_initialized() {
+            game.error("Cmd::add_command after host initialized");
+        }
+
+        if is_variable_name(&name) {
+            unimplemented!("console print already defined as a var");
+            return;
+        }
+
+        if self.command_exists(&name) {
+            unimplemented!("console print command already defined");
+            return;
+        }
+
+        self.cmd_functions.push( CmdFunction { name, function } );
+    }
+
+    pub fn command_exists(&self, name: &'static str) -> bool {
+        for cmd in &self.cmd_functions {
+            if cmd.name == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn complete_command(&self, partial: &String) -> Option<String> {
+        for cmd in &self.cmd_functions {
+            if cmd.name.starts_with(partial) {
+                return Some(String::from(cmd.name));
+            }
+        }
+        None
+    }
+}
+
+
+fn is_host_initialized() -> bool {
+    unimplemented!();
+}
+
+fn is_variable_name(name: &str) -> bool {
+    unimplemented!();
 }
 
 
