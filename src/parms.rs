@@ -11,6 +11,7 @@ pub struct Parms {
     // C: com_argv
     pub argv: Vec<String>,
     pub cwd: String,
+    pub cachedir: Option<String>,
     pub cmdline: String,
     pub is_dedicated: bool,
     pub standard_quake: bool,
@@ -23,6 +24,7 @@ impl Parms {
         let mut parms = Parms {
             argv,
             cwd,
+            cachedir: None,  // Don't intend to support this.
             cmdline: String::new(),
             is_dedicated: false,
             standard_quake: true,
@@ -95,6 +97,24 @@ impl Parms {
                         val.parse().ok()
                     }
                 }
+            }
+        }
+    }
+
+    pub fn get_raw_parm_values(&self, parm: &str) -> Option<Vec<String>> {
+        match self.check_parm(parm) {
+            None => None,
+            Some(p_idx) => {
+                let mut raw: Vec<String> = Vec::new();
+                for val in self.argv.iter().skip(p_idx + 1) {
+                    match val.chars().nth(0) {
+                        None => break,
+                        Some('+') => break,
+                        Some('-') => break,
+                        Some(_) => raw.push(val.clone())
+                    }
+                }
+                Some(raw)
             }
         }
     }
