@@ -1,8 +1,4 @@
-mod game;
-mod parms;
-mod quakedef;
-mod time;
-mod cmd;
+extern crate rqs;
 
 
 fn main() {
@@ -15,6 +11,6 @@ fn main() {
     let cwd = std::env::current_dir();
     let cwd = String::from(cwd.unwrap().to_str().unwrap());
 
-    let mut game = game::new(argv_owned, cwd);
+    let mut game = rqs::game::new(argv_owned, cwd);
     game.run();
 }
