@@ -37,7 +37,7 @@ impl Game {
         panic!(s);
     }
 
-    pub fn printf(&self, s: String) {
+    pub fn printf(&self, _s: String) {
         if self.parms.is_dedicated {
             unimplemented!("dedicated server printf");
         }

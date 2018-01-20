@@ -35,7 +35,7 @@ impl Cmd {
         cmd
     }
 
-    fn add_basic_commands(&mut self) {
+    fn _add_basic_commands(&mut self) {
         unimplemented!("add basic commands");
         // self.add_command("stuffcmds", stuffcmds_fn);
         // self.add_command("exec", exec_fn);
@@ -106,12 +106,12 @@ impl Cmd {
 
         if is_variable_name(&name) {
             unimplemented!("console print already defined as a var");
-            return;
+            // return;
         }
 
         if self.command_exists(&name) {
             unimplemented!("console print command already defined");
-            return;
+            // return;
         }
 
         self.cmd_functions.push( CmdFunction { name, function } );
@@ -141,7 +141,7 @@ fn is_host_initialized() -> bool {
     unimplemented!();
 }
 
-fn is_variable_name(name: &str) -> bool {
+fn is_variable_name(_name: &str) -> bool {
     unimplemented!();
 }
 
