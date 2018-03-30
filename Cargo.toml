@@ -1,0 +1,7 @@
+[package]
+name = "rqs"
+version = "0.1.0"
+authors = ["achan1989 <achan1989@gmail.com>"]
+
+[dependencies]
+
