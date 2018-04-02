@@ -1,3 +1,7 @@
+#![warn(missing_docs)]
+
+//! Quake, ported to Rust.
+
 extern crate byteorder;
 #[macro_use]
 extern crate failure;

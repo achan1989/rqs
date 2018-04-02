@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 //! Temporary version of TryFrom, until it's available in stable Rust.
 
 use std::error::Error;

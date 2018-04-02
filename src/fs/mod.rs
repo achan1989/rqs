@@ -18,5 +18,7 @@
 // Modified by Adrian Chan, March 2018
 // Pulled the filesystem-y parts out of common.c
 
+//! Things relating to the Quake filesystem.
+
 pub mod pack;
 

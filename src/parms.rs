@@ -18,6 +18,8 @@
 // Modified by Adrian Chan, March 2018
 // Pulled the command line parameter handling out of common.c
 
+//! Command line parameter handling.
+
 use std;
 
 use defs;
@@ -53,6 +55,7 @@ pub struct Parms {
 }
 
 impl Parms {
+    /// Construct a new `Parms`.
     pub fn new(mut argv: Vec<String>, cwd: String) -> Self {
         argv.truncate(defs::MAX_NUM_ARGVS);
         // Reconstitute the command line for the cmdline externally visible
@@ -79,6 +82,11 @@ impl Parms {
         };
         parms.detect_features();
         parms
+    }
+
+    /// The current working directory (when Quake was started).
+    pub fn cwd(&self) -> &str {
+        &self.cwd
     }
 
     /// Is Quake running as a dedicated server?
