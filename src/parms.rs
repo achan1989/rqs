@@ -20,8 +20,8 @@
 
 use std;
 
-const MAX_NUM_ARGVS: usize = 50;
-const CMDLINE_LENGTH: usize = 256;
+use defs;
+
 const SAFE_ARGVS: [&'static str; 7] =
     ["-stdvid", "-nolan", "-nosound", "-nocdaudio", "-nojoy", "-nomouse",
      "-dibonly"];
@@ -54,11 +54,11 @@ pub struct Parms {
 
 impl Parms {
     pub fn new(mut argv: Vec<String>, cwd: String) -> Self {
-        argv.truncate(MAX_NUM_ARGVS);
+        argv.truncate(defs::MAX_NUM_ARGVS);
         // Reconstitute the command line for the cmdline externally visible
         // cvar.
         let mut cmdline: String = argv[..].join(" ");
-        cmdline.truncate(CMDLINE_LENGTH);
+        cmdline.truncate(defs::CMDLINE_LENGTH);
 
         let safe = argv.contains(&"-safe".to_string());
         if safe {
