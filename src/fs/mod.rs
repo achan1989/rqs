@@ -21,7 +21,11 @@
 //! Things relating to the Quake filesystem.
 
 pub mod pack;
+pub mod reader;
+pub use self::reader::FsReader;
 
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 
 use failure::Error;
@@ -147,6 +151,66 @@ impl FileSys {
         self.game_dir = path;
         Ok(())
     }
+
+    /// Find a file by name, returning a `FsReader` of the file if found.
+    fn find_file(&mut self, name: &str) -> Result<Option<FsReader>, Error> {
+        // Conditionally skip the first entry, because "gross hack to use quake
+        // 1 progs with quake 2 maps".
+        let skip_n = match self.use_proghack {
+            true => 1,
+            false => 0,
+        };
+        // Search paths are stored in reverse priority order.
+        for search in self.search_paths.iter_mut().rev().skip(skip_n) {
+            match search {
+                &mut SearchPath::Pack(ref mut pak) => {
+                    // Try to find a matching file contained in the pack.
+                    match pak.file(name) {
+                        Err(e) => return Err(e),
+                        Ok(None) => (),
+                        Ok(Some(reader)) => return Ok(Some(reader)),
+                    }
+                },
+                &mut SearchPath::Directory(ref dir) => {
+                    // Try to find a matching file on the disk.
+                    let mut path = dir.clone();
+                    path.push(name);
+                    match path.is_file() {
+                        false => (),
+                        true => {
+                            let file = File::open(path)?;
+                            return Ok(Some(FsReader::for_file(file)?))
+                        },
+                    }
+                },
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Load a file. This method allocates the buffer that the data is returned
+    /// in.
+    pub fn load_file(&mut self, name: &str) -> Result<Option<Vec<u8>>, Error> {
+        match self.find_file(name)? {
+            None => Ok(None),
+            Some(mut fsr) => {
+                let mut buf = Vec::with_capacity(fsr.len());
+                fsr.read_to_end(&mut buf)?;
+                Ok(Some(buf))
+            }
+        }
+    }
+
+    /// TODO: load a file into the given cache.
+    pub fn load_file_into_cache(&self, _name: &str, _cache: ()) {
+        unimplemented!();
+    }
+
+    /// TODO: load a file into the given buffer.
+    pub fn load_file_into_buf(&self, _name: &str, _buf: &mut [u8]) {
+        unimplemented!();
+    }
 }
 
 /// A place to look for resources.
@@ -195,5 +259,19 @@ mod tests {
             },
             ref x => panic!("expected a pack search path for 'pak1.pak', got {:?}", x),
         }
+    }
+
+    #[test]
+    /// Load a resource from the file system.
+    fn fs_load_file() {
+        let parms = Parms::new(
+            vec!["-basedir".into(), common::base_dir().to_string_lossy().to_string()],
+            "cwd".into());
+        let mut fs = FileSys::new(&parms).unwrap();
+        let wav = fs.load_file("sound/items/r_item1.wav").unwrap().unwrap();
+
+        // Simple check: does it look like the WAV file we expect?
+        assert_eq!(wav.len(), 6822);
+        assert_eq!(&wav[0..4], b"RIFF");
     }
 }

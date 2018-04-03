@@ -21,11 +21,13 @@
 //! Things related to working with .pak files.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use failure::Error;
+use fs::FsReader;
+
 use try_from_temp::TryFromTemp;
 
 
@@ -45,7 +47,7 @@ const MAX_FILES_IN_PACK: usize = 2048;
 impl Pack {
     /// Attempt to load the given .pak file.
     ///
-    /// If no file exists at the given path, None is returned.
+    /// If no file exists at the given path then `Ok(None)` is returned.
     /// Otherwise, an attempt is made to read the file and parse its contents.
     /// Any problems while doing this result in an `Err(Error)` being
     /// returned.
@@ -84,6 +86,19 @@ impl Pack {
     pub fn path(&self) -> &Path {
         self.file_path.as_path()
     }
+
+    /// Retrieve an `FsReader` for the given file within the `Pack`, if it
+    /// exists.
+    pub fn file(&mut self, name: &str) -> Result<Option<FsReader>, Error> {
+        match self.file_infos.iter().find(|f| f.name == name) {
+            Some(info) => {
+                Ok(Some(
+                    FsReader::for_pack_file(
+                        &mut self.reader, &info)?))
+            },
+            None => Ok(None),
+        }
+    }
 }
 
 /// Represents the `Pack`'s header information.
@@ -101,7 +116,6 @@ impl PackHeader {
 
     // TODO: switch to impl trait?
     fn from(reader: &mut BufReader<File>) -> Result<Self, Error> {
-        use std::io::Read;
         use byteorder::{ByteOrder, LittleEndian};
 
         const HEADER_SIZE: usize = 4+4+4;
@@ -132,12 +146,13 @@ impl PackHeader {
 #[derive(Debug)]
 pub struct FileInfo {
     // name: [u8; 56],  file name is stored as 56 char on disk, but we'll store
-    // it in memory as a String.
-    name: String,
+    // it in memory as...
+    /// Name of the file.
+    pub name: String,
     /// Offset of the start of the file within the pack.
-    offset: u64,  // i32 on disk
+    pub offset: u64,  // i32 on disk
     /// Size of the file, in bytes.
-    size: usize,  // i32 on disk
+    pub size: usize,  // i32 on disk
 }
 
 const FILE_INFO_SIZE_ON_DISK: usize = 56+4+4;
@@ -148,7 +163,6 @@ impl FileInfo {
     // TODO: switch to impl trait?
     fn from(reader: &mut BufReader<File>) -> Result<Self, Error> {
         use std::ffi::CStr;
-        use std::io::Read;
         use byteorder::{ByteOrder, LittleEndian};
 
         const NAME_SLICE: Range<usize> = 0..56;
