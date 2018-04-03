@@ -3,10 +3,8 @@
 //! Quake, ported to Rust.
 
 extern crate byteorder;
-#[macro_use]
-extern crate failure;
-#[macro_use]
-extern crate failure_derive;
+#[macro_use] extern crate failure;
+// #[macro_use] extern crate failure_derive;
 
 pub mod defs;
 pub mod parms;

@@ -23,7 +23,7 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use failure::Error;
 use try_from_temp::TryFromTemp;
@@ -78,6 +78,11 @@ impl Pack {
             reader,
             file_infos,
         }))
+    }
+
+    /// The location of this .pak file on disk.
+    pub fn path(&self) -> &Path {
+        self.file_path.as_path()
     }
 }
 
@@ -197,8 +202,8 @@ mod tests {
         // given?
         use std::io::{Read, Seek, SeekFrom};
         let mut wav_start = vec![0; 4];
-        pack.reader.seek(SeekFrom::Start(f.offset));
-        pack.reader.read_exact(&mut wav_start);
+        pack.reader.seek(SeekFrom::Start(f.offset)).unwrap();
+        pack.reader.read_exact(&mut wav_start).unwrap();
         assert_eq!(wav_start, b"RIFF");
     }
 }
