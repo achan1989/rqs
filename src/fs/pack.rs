@@ -180,34 +180,11 @@ impl FileInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn data_dir() -> PathBuf {
-        use std::env;
-        use std::env::VarError;
-        use defs;
-
-        let var = env::var("QUAKE_DIR");
-        let mut dir = match var {
-            Err(VarError::NotPresent) =>
-                panic!("Must set QUAKE_DIR to run these tests"),
-            Err(VarError::NotUnicode(v)) =>
-                panic!("QUAKE_DIR is not valid unicode: '{:?}'", v),
-            Ok(s) =>
-                PathBuf::from(s),
-        };
-        dir.push(defs::GAMENAME);
-        dir
-    }
-
-    fn pak0_path() -> PathBuf {
-        let mut p = data_dir();
-        p.push("PAK0.PAK");
-        p
-    }
+    use test_common as common;
 
     #[test]
     fn read_pak0() {
-        let path = pak0_path();
+        let path = common::pak0_path();
         let mut pack = Pack::load(path).unwrap().unwrap();
         assert_eq!(pack.file_infos.len(), 339);
 
