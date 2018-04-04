@@ -26,9 +26,10 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use failure::Error;
-use fs::FsReader;
 
+use fs::FsReader;
 use try_from_temp::TryFromTemp;
+use util;
 
 
 /// Represents a .pak file -- a bundle of other files, a bit like a .tar file.
@@ -162,7 +163,6 @@ impl FileInfo {
 
     // TODO: switch to impl trait?
     fn from(reader: &mut BufReader<File>) -> Result<Self, Error> {
-        use std::ffi::CStr;
         use byteorder::{ByteOrder, LittleEndian};
 
         const NAME_SLICE: Range<usize> = 0..56;
@@ -172,16 +172,7 @@ impl FileInfo {
         let mut info = [0; FILE_INFO_SIZE_ON_DISK];
         reader.read_exact(&mut info)?;
 
-        // NAME_SLICE is the max length slice of bytes that could contain the
-        // name, and will normally contain many trailing zeros.
-        // from_bytes_with_nul() only accepts one trailing zero, so attempt to
-        // find the subset of the slice that satisfies this.
-        let name_slice = match info[NAME_SLICE].iter().position(|n| n == &0) {
-            Some(i) => 0..(i+1),
-            None => NAME_SLICE
-        };
-        let c_name = CStr::from_bytes_with_nul(&info[name_slice])?;
-        let name = c_name.to_str()?.to_string();
+        let name = util::cstr_buf_to_string(&info[NAME_SLICE])?;
         let offset = u64::try_from_temp(
             LittleEndian::read_i32(&info[OFFSET_SLICE]))?;
         let size = usize::try_from_temp(
