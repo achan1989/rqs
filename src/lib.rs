@@ -14,3 +14,4 @@ pub mod fs;
 mod test_common;
 pub mod try_from_temp;
 pub mod util;
+pub mod wad;
