@@ -1,0 +1,9 @@
+[package]
+name = "rqs"
+version = "0.1.0"
+authors = ["achan1989 <achan1989@gmail.com>"]
+
+[dependencies]
+byteorder = "^1.2"
+failure = "^0.1"
+failure_derive = "^0.1"
