@@ -16,7 +16,7 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // Modified by Adrian Chan, March 2018
-// atof() from common.c
+// atof(), parse_token() from common.c
 
 //! Misc utility functions.
 
@@ -359,6 +359,83 @@ impl<'a> StrProcessor<'a> {
         s == ")" ||
         s == "'" ||
         s == ":"
+    }
+}
+
+/// The result of using [`parse_token`] to try to parse a token from a str.
+pub struct ParseResult {
+    /// The token portion of the original str.
+    pub token: Option<Range<usize>>,
+    /// The remainder of the original str.
+    pub remainder: Option<Range<usize>>,
+}
+
+/// Parse a token out of a string. Equivalent of original Quake's COM_Parse()
+/// function.
+///
+/// Given an arbitrary string, try to parse the first token out of it.
+/// A token is one of:
+///
+/// * a `"quoted string"`
+/// * one of the single characters `{}()':`
+/// * a "regular word" -- a sequence of characters that doesn't contain
+///   whitespace or one of the single characters above
+///
+/// Note that using C-like escape characters is not possible -- all attempts to
+/// do so will be interpreted literally. E.g. parsing a string containing
+/// `\"hello\" world` will result in a token that is exactly `\"hello\"`.
+///
+/// This function skips over non-token parts of the string, such as leading
+/// whitespace or comments. Comments start with `//` and continue until a
+/// `\n` character.
+///
+/// # Example
+///
+/// ```
+/// use rqs::util::parse_token;
+///
+/// let text = "
+/// // blah blah
+/// abc 123";
+/// let result = parse_token(&text);
+/// assert_eq!(&text[result.token.unwrap()], "abc");
+/// assert_eq!(&text[result.remainder.unwrap()], " 123");
+/// ```
+pub fn parse_token(text: &str) -> ParseResult {
+    let mut sp = StrProcessor::new(text);
+
+    // Get to the next token.
+    loop {
+        sp.skip_whitespace();
+        if !sp.skip_comment() {
+            break;
+        }
+    }
+
+    if sp.reached_end() {
+        return ParseResult {
+            token: None,
+            remainder: None,
+        };
+    }
+
+    if let Some(token) = sp.consume_quoted() {
+        return ParseResult {
+            token: Some(token),
+            remainder: sp.remainder(),
+        };
+    }
+
+    if let Some(token) = sp.consume_special() {
+        return ParseResult {
+            token: Some(token),
+            remainder: sp.remainder(),
+        };
+    }
+
+    ParseResult {
+        token: sp.consume_normal(),
+        remainder: sp.remainder(),
     }
 }
 
@@ -862,5 +939,50 @@ mod tests_str_processor {
             assert_eq!(&text[sp.consume_normal().unwrap()], "\"foo");
             assert_eq!(&text[sp.remainder().unwrap()], " bar\" baz");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_parse_token {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        let text = "  hello world";
+        let result = parse_token(&text);
+        assert_eq!(&text[result.token.unwrap()], "hello");
+        assert_eq!(&text[result.remainder.unwrap()], " world");
+    }
+
+    #[test]
+    fn comment_with_quote() {
+        let text = "//comment \"quote\" \n  hello world";
+        let result = parse_token(&text);
+        assert_eq!(&text[result.token.unwrap()], "hello");
+        assert_eq!(&text[result.remainder.unwrap()], " world");
+    }
+
+    #[test]
+    fn multi_comment() {
+        let text = " //com1\n//com2 \n  //com3\n  hello world";
+        let result = parse_token(&text);
+        assert_eq!(&text[result.token.unwrap()], "hello");
+        assert_eq!(&text[result.remainder.unwrap()], " world");
+    }
+
+    #[test]
+    fn special() {
+        let text = "  {hello world";
+        let result = parse_token(&text);
+        assert_eq!(&text[result.token.unwrap()], "{");
+        assert_eq!(&text[result.remainder.unwrap()], "hello world");
+    }
+
+    #[test]
+    fn quoted() {
+        let text = "  \"hello world\"  abc";
+        let result = parse_token(&text);
+        assert_eq!(&text[result.token.unwrap()], "hello world");
+        assert_eq!(&text[result.remainder.unwrap()], "  abc");
     }
 }
