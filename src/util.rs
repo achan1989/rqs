@@ -21,6 +21,7 @@
 //! Misc utility functions.
 
 use std::ffi::CStr;
+use std::ops::Range;
 
 use failure::Error;
 
@@ -156,6 +157,208 @@ pub fn atof(s: &str) -> Option<f32> {
                 }
             },
         }
+    }
+}
+
+/// Performs stateful parsing-related operations on a string.
+///
+/// The `StrProcessor` holds a reference to a string, and has a "cursor"
+/// marking the current position. When first created, the cursor is at the start
+/// of the string.
+///
+/// Various methods try to parse different kinds of substring beyond the cursor;
+/// if successful they will move the cursor to the end of the substring, and
+/// return the [`Range`] of the substring.
+///
+/// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
+pub struct StrProcessor<'a> {
+    str: &'a str,
+    i: usize,
+    max_i: usize,
+}
+
+impl<'a> StrProcessor<'a> {
+    /// Create a new `StrProcessor` over the given string.
+    pub fn new(str: &'a str) -> Self {
+        Self {
+            str,
+            i: 0,
+            max_i: str.len(),
+        }
+    }
+
+    /// Move past any whitespace at and immediately beyond the current location.
+    ///
+    /// A whitespace character is anything "less than" or equal to the ASCII
+    /// space character.
+    pub fn skip_whitespace(&mut self) {
+        loop {
+            match self.str.get(self.i..self.i+1) {
+                None => break,
+                Some(ws) if ws <= " " => self.i += 1,
+                Some(_) => break,
+            }
+        }
+    }
+
+    /// Move past a `//` comment, if one exists at the current location.
+    ///
+    /// A comment ends when a `\n` character, or the end of the string, is
+    /// reached.
+    ///
+    /// Returns `true` if a comment was skipped.
+    pub fn skip_comment(&mut self) -> bool {
+        if (&self.str[self.i..]).starts_with("//") {
+            loop {
+                match self.str.get(self.i..self.i+1) {
+                    None => break,
+                    Some("\n") => {
+                        self.i += 1;
+                        break;
+                    },
+                    Some(_) => self.i += 1,
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Has the `StrProcessor` reached the end of the string?
+    pub fn reached_end(&self) -> bool {
+        self.i == self.max_i
+    }
+
+    /// Get the remainder of the string, from the current position onwards.
+    ///
+    /// Returns `None` if the `StrProcessor` is at the end of the string.
+    /// Otherwise returns the remainder as a [`Range`] within the original
+    /// string.
+    ///
+    /// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
+    pub fn remainder(&self) -> Option<Range<usize>> {
+        match self.i == self.max_i {
+            true => None,
+            false => Some(self.i..self.max_i),
+        }
+    }
+
+    /// Try to move past and return a quoted string at the current location.
+    ///
+    /// Note that quotes cannot be escaped with `\"`, either before the quote
+    /// starts, or within the quote.
+    ///
+    /// Returns `None` if there is no quote at the current location, or if the
+    /// `StrProcessor` is at the end of the string.
+    /// Otherwise returns the contents of the string between the quote marks,
+    /// as a [`Range`] within the original string.
+    ///
+    /// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
+    pub fn consume_quoted(&mut self) -> Option<Range<usize>> {
+        match self.str.get(self.i..self.i+1) {
+            None => return None,
+            Some(c) if c != "\"" => return None,
+            Some("\"") => {
+                self.i += 1;
+                // A single `"` at the end of the string is counted as a zero
+                // length string.
+                if self.i == self.max_i {
+                    return Some(0..0);
+                }
+
+                match (&self.str[self.i..]).chars().position(|c| c == '"') {
+                    // A `""` is counted as a zero length string.
+                    Some(0) => {
+                        self.i += 1;
+                        return Some(0..0);
+                    },
+                    // Quote ends before or at the end of the string.
+                    Some(p) => {
+                        // Return the text...
+                        let start = self.i;
+                        let end = start + p;
+                        // ...and move past it.
+                        self.i = end + 1;
+                        return Some(start..end);
+                    },
+                    // Quote doesn't end before the end of the string, but
+                    // count it as if it ended at the end of the string.
+                    None => {
+                        let start = self.i;
+                        self.i = self.max_i;
+                        return Some(start..self.max_i);
+                    },
+                }
+            },
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Try to move past and return a special character at the current location.
+    ///
+    /// A special character is one of `{}()':`.
+    ///
+    /// Returns `None` if there is no special character at the current location,
+    /// or if the `StrProcessor` is at the end of the string.
+    /// Otherwise returns a [`Range`] within the original string.
+    ///
+    /// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
+    pub fn consume_special(&mut self) -> Option<Range<usize>> {
+        match self.str.get(self.i..self.i+1) {
+            Some(c) if Self::is_special(c) => {
+                let start = self.i;
+                let end = start + 1;
+                self.i += 1;
+                Some(start..end)
+            },
+            Some(_) | None => None,
+        }
+    }
+
+    /// Try to move past and return a "normal" token at the current location.
+    ///
+    /// A "normal" token is a sequence of characters that:
+    ///
+    /// * Doesn't contain a special character
+    /// * Doesn't contain whitespace (including `\n`)
+    ///
+    /// Returns `None` if there is no "normal" token at the current location,
+    /// or if the `StrProcessor` is at the end of the string.
+    /// Otherwise returns a [`Range`] within the original string.
+    ///
+    /// # Note
+    ///
+    /// This method does not treat quotes specially. If this is important, use
+    /// `consume_quoted`.
+    ///
+    /// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
+    pub fn consume_normal(&mut self) -> Option<Range<usize>> {
+        if self.i == self.max_i {
+            return None;
+        }
+
+        let start = self.i;
+        loop {
+            match self.str.get(self.i..self.i+1) {
+                Some(ws) if ws <= " " => break,
+                Some(sp) if Self::is_special(sp) => break,
+                None => break,
+                Some(_) => self.i += 1,
+            }
+        }
+
+        Some(start..self.i)
+    }
+
+    /// Is the given string a single special character?
+    fn is_special(s: &str) -> bool {
+        s == "{" ||
+        s == "}" ||
+        s == "(" ||
+        s == ")" ||
+        s == "'" ||
+        s == ":"
     }
 }
 
@@ -346,5 +549,318 @@ mod tests_atof {
         assert_eq!(atof("..5"), None);
         assert_eq!(atof("-..5"), None);
         assert_eq!(atof("+5.0"), None);
+    }
+}
+
+
+#[cfg(test)]
+mod tests_str_processor {
+    use super::*;
+
+    #[test]
+    fn whitespace() {
+        {
+            let text = "abc";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace();
+            assert_eq!(&text[sp.remainder().unwrap()], "abc");
+        }
+
+        {
+            let text = " \n\tabc";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace();
+            assert_eq!(&text[sp.remainder().unwrap()], "abc");
+        }
+
+        {
+            let text = " abc\n\t";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace();
+            assert_eq!(&text[sp.remainder().unwrap()], "abc\n\t");
+        }
+
+        {
+            let text = " ";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace();
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace();
+            assert!(sp.remainder().is_none());
+        }
+    }
+
+    #[test]
+    fn comments() {
+        {
+            {
+                let text = "abc";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), false);
+                assert_eq!(&text[sp.remainder().unwrap()], "abc");
+            }
+
+            {
+                let text = " //abc";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), false);
+                assert_eq!(&text[sp.remainder().unwrap()], " //abc");
+            }
+
+            {
+                let text = "/abc";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), false);
+                assert_eq!(&text[sp.remainder().unwrap()], "/abc");
+            }
+
+            {
+                let text = "//abc";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), true);
+                assert!(sp.remainder().is_none());
+            }
+
+            {
+                let text = "//abc\n";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), true);
+                assert!(sp.remainder().is_none());
+            }
+
+            {
+                let text = "//abc\nhi";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), true);
+                assert_eq!(&text[sp.remainder().unwrap()], "hi");
+            }
+
+            {
+                let text = "//abc\n//123";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), true);
+                assert_eq!(&text[sp.remainder().unwrap()], "//123");
+            }
+
+            {
+                let text = "//abc\"quoted\n thing\"x";
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(sp.skip_comment(), true);
+                assert_eq!(&text[sp.remainder().unwrap()], " thing\"x");
+            }
+        }
+    }
+
+    #[test]
+    fn reached_end() {
+        {
+            let text = "abc";
+            let sp = StrProcessor::new(&text);
+            assert!( !sp.reached_end() );
+        }
+
+        {
+            let text = " ";
+            let sp = StrProcessor::new(&text);
+            assert!( !sp.reached_end() );
+        }
+
+        {
+            let text = "";
+            let sp = StrProcessor::new(&text);
+            assert!( sp.reached_end() );
+        }
+
+        {
+            let text = "//abc";
+            let mut sp = StrProcessor::new(&text);
+            assert!( !sp.reached_end() );
+            sp.skip_comment();
+            assert!( sp.reached_end() );
+        }
+    }
+
+    #[test]
+    fn quoted() {
+        {
+            let text = "abc";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_quoted().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "abc");
+        }
+
+        {
+            let text = "abc \"";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_quoted().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "abc \"");
+        }
+
+        {
+            let text = "\"hello\" world";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "hello");
+            assert_eq!(&text[sp.remainder().unwrap()], " world");
+        }
+
+        {
+            let text = "\"hello world\"";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "hello world");
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "\"hello world";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "hello world");
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "\"";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "");
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "\"\"";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "");
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "\"hello\nworld\" foo";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "hello\nworld");
+            assert_eq!(&text[sp.remainder().unwrap()], " foo");
+        }
+
+        // Quotes can't be escaped before.
+        {
+            let text = "\\\"abc\"123";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_quoted().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "\\\"abc\"123");
+        }
+
+        // Quotes can't be escaped inside.
+        {
+            let text = "\"abc\\\"123";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_quoted().unwrap()], "abc\\");
+            assert_eq!(&text[sp.remainder().unwrap()], "123");
+        }
+    }
+
+    #[test]
+    fn special() {
+        {
+            let text = "abc";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_special().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "abc");
+        }
+
+        {
+            let text = "abc}";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_special().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "abc}");
+        }
+
+        {
+            let text = " }abc";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_special().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], " }abc");
+        }
+
+        {
+            // Test "{abc" etc.
+            for c in "{}()':".chars() {
+                let mut text = c.to_string();
+                text.push_str("abc");
+
+                let mut sp = StrProcessor::new(&text);
+                assert_eq!(&text[sp.consume_special().unwrap()], c.to_string());
+                assert_eq!(&text[sp.remainder().unwrap()], "abc");
+            }
+        }
+
+        {
+            let text = "{}";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_special().unwrap()], "{");
+            assert_eq!(&text[sp.remainder().unwrap()], "}");
+        }
+
+        {
+            let text = "{";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_special().unwrap()], "{");
+            assert!(sp.remainder().is_none());
+        }
+    }
+
+    #[test]
+    fn normal() {
+        {
+            let text = "foo";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo");
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "foo ";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo");
+            assert_eq!(&text[sp.remainder().unwrap()], " ");
+        }
+
+        {
+            let text = "foo bar";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo");
+            assert_eq!(&text[sp.remainder().unwrap()], " bar");
+        }
+
+        {
+            let text = "foo:bar";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo");
+            assert_eq!(&text[sp.remainder().unwrap()], ":bar");
+        }
+
+        {
+            let text = "foo\nbar";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo");
+            assert_eq!(&text[sp.remainder().unwrap()], "\nbar");
+        }
+
+        // Quotes can't be used inside.
+        {
+            let text = "foo\"bar\" baz";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "foo\"bar\"");
+            assert_eq!(&text[sp.remainder().unwrap()], " baz");
+        }
+
+        // Quotes can't be used before.
+        {
+            let text = "\"foo bar\" baz";
+            let mut sp = StrProcessor::new(&text);
+            assert_eq!(&text[sp.consume_normal().unwrap()], "\"foo");
+            assert_eq!(&text[sp.remainder().unwrap()], " bar\" baz");
+        }
     }
 }
