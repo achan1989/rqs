@@ -6,6 +6,7 @@ extern crate byteorder;
 #[macro_use] extern crate failure;
 // #[macro_use] extern crate failure_derive;
 
+pub mod cmd;
 pub mod cvar;
 pub mod defs;
 pub mod parms;
