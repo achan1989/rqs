@@ -170,6 +170,11 @@ pub fn atof(s: &str) -> Option<f32> {
 /// if successful they will move the cursor to the end of the substring, and
 /// return the [`Range`] of the substring.
 ///
+/// Note that using C-like escape characters is not possible, anywhere within
+/// the given string. All attempts to do so will be interpreted literally.
+/// E.g. consuming the first token from a string containing `\"hello\" world`
+/// will result in a token that is exactly `\"hello\"`.
+///
 /// [`Range`]: https://doc.rust-lang.org/std/ops/struct.Range.html
 pub struct StrProcessor<'a> {
     str: &'a str,
@@ -195,6 +200,22 @@ impl<'a> StrProcessor<'a> {
         loop {
             match self.str.get(self.i..self.i+1) {
                 None => break,
+                Some(ws) if ws <= " " => self.i += 1,
+                Some(_) => break,
+            }
+        }
+    }
+
+    /// Move past any (non-newline) whitespace at and immediately beyond the
+    /// current location.
+    ///
+    /// A whitespace character is anything "less than" or equal to the ASCII
+    /// space character **except** for `\n`.
+    pub fn skip_whitespace_until_newline(&mut self) {
+        loop {
+            match self.str.get(self.i..self.i+1) {
+                None => break,
+                Some("\n") => break,
                 Some(ws) if ws <= " " => self.i += 1,
                 Some(_) => break,
             }
@@ -351,6 +372,58 @@ impl<'a> StrProcessor<'a> {
         Some(start..self.i)
     }
 
+    /// Try to move past and return the next token at or after the current
+    /// location. Somewhat equivalent to original Quake's COM_Parse() function.
+    ///
+    /// A token is one of:
+    ///
+    /// * a `"quoted string"`, as per [`consume_quoted`]
+    /// * one of the single characters `{}()':`, as per [`consume_special`]
+    /// * a "normal word", as per [`consume_normal`]
+    ///
+    /// This method skips over non-token parts of the string, such as whitespace
+    /// or comments.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rqs::util::StrProcessor;
+    ///
+    /// let text = "
+    /// // blah blah
+    /// abc 123";
+    ///
+    /// let mut sp = StrProcessor::new(&text);
+    /// assert_eq!(&text[sp.consume_token().unwrap()], "abc");
+    /// assert_eq!(&text[sp.remainder().unwrap()], " 123");
+    /// ```
+    ///
+    /// [`consume_quoted`]: #method.consume_quoted
+    /// [`consume_special`]: #method.consume_special
+    /// [`consume_normal`]: #method.consume_normal
+    pub fn consume_token(&mut self) -> Option<Range<usize>> {
+        loop {
+            self.skip_whitespace();
+            if !self.skip_comment() {
+                break;
+            }
+        }
+
+        if self.reached_end() {
+            return None;
+        }
+
+        if let Some(token) = self.consume_quoted() {
+            return Some(token);
+        }
+
+        if let Some(token) = self.consume_special() {
+            return Some(token);
+        }
+
+        self.consume_normal()
+    }
+
     /// Is the given string a single special character?
     fn is_special(s: &str) -> bool {
         s == "{" ||
@@ -359,83 +432,6 @@ impl<'a> StrProcessor<'a> {
         s == ")" ||
         s == "'" ||
         s == ":"
-    }
-}
-
-/// The result of using [`parse_token`] to try to parse a token from a str.
-pub struct ParseResult {
-    /// The token portion of the original str.
-    pub token: Option<Range<usize>>,
-    /// The remainder of the original str.
-    pub remainder: Option<Range<usize>>,
-}
-
-/// Parse a token out of a string. Equivalent of original Quake's COM_Parse()
-/// function.
-///
-/// Given an arbitrary string, try to parse the first token out of it.
-/// A token is one of:
-///
-/// * a `"quoted string"`
-/// * one of the single characters `{}()':`
-/// * a "regular word" -- a sequence of characters that doesn't contain
-///   whitespace or one of the single characters above
-///
-/// Note that using C-like escape characters is not possible -- all attempts to
-/// do so will be interpreted literally. E.g. parsing a string containing
-/// `\"hello\" world` will result in a token that is exactly `\"hello\"`.
-///
-/// This function skips over non-token parts of the string, such as leading
-/// whitespace or comments. Comments start with `//` and continue until a
-/// `\n` character.
-///
-/// # Example
-///
-/// ```
-/// use rqs::util::parse_token;
-///
-/// let text = "
-/// // blah blah
-/// abc 123";
-/// let result = parse_token(&text);
-/// assert_eq!(&text[result.token.unwrap()], "abc");
-/// assert_eq!(&text[result.remainder.unwrap()], " 123");
-/// ```
-pub fn parse_token(text: &str) -> ParseResult {
-    let mut sp = StrProcessor::new(text);
-
-    // Get to the next token.
-    loop {
-        sp.skip_whitespace();
-        if !sp.skip_comment() {
-            break;
-        }
-    }
-
-    if sp.reached_end() {
-        return ParseResult {
-            token: None,
-            remainder: None,
-        };
-    }
-
-    if let Some(token) = sp.consume_quoted() {
-        return ParseResult {
-            token: Some(token),
-            remainder: sp.remainder(),
-        };
-    }
-
-    if let Some(token) = sp.consume_special() {
-        return ParseResult {
-            token: Some(token),
-            remainder: sp.remainder(),
-        };
-    }
-
-    ParseResult {
-        token: sp.consume_normal(),
-        remainder: sp.remainder(),
     }
 }
 
@@ -669,6 +665,51 @@ mod tests_str_processor {
             let mut sp = StrProcessor::new(&text);
             sp.skip_whitespace();
             assert!(sp.remainder().is_none());
+        }
+    }
+
+    #[test]
+    fn whitespace_not_newline() {
+        {
+            let text = "abc";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert_eq!(&text[sp.remainder().unwrap()], "abc");
+        }
+
+        {
+            let text = " \t\n\tabc";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert_eq!(&text[sp.remainder().unwrap()], "\n\tabc");
+        }
+
+        {
+            let text = " abc  ";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert_eq!(&text[sp.remainder().unwrap()], "abc  ");
+        }
+
+        {
+            let text = " ";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert!(sp.remainder().is_none());
+        }
+
+        {
+            let text = "\n\tabc";
+            let mut sp = StrProcessor::new(&text);
+            sp.skip_whitespace_until_newline();
+            assert_eq!(&text[sp.remainder().unwrap()], "\n\tabc");
         }
     }
 
@@ -943,46 +984,54 @@ mod tests_str_processor {
 }
 
 #[cfg(test)]
-mod tests_parse_token {
+mod tests_str_processor_consume_token {
     use super::*;
 
     #[test]
     fn basic() {
         let text = "  hello world";
-        let result = parse_token(&text);
-        assert_eq!(&text[result.token.unwrap()], "hello");
-        assert_eq!(&text[result.remainder.unwrap()], " world");
+        let mut sp = StrProcessor::new(&text);
+        assert_eq!(&text[sp.consume_token().unwrap()], "hello");
+        assert_eq!(&text[sp.remainder().unwrap()], " world");
     }
 
     #[test]
     fn comment_with_quote() {
         let text = "//comment \"quote\" \n  hello world";
-        let result = parse_token(&text);
-        assert_eq!(&text[result.token.unwrap()], "hello");
-        assert_eq!(&text[result.remainder.unwrap()], " world");
+        let mut sp = StrProcessor::new(&text);
+        assert_eq!(&text[sp.consume_token().unwrap()], "hello");
+        assert_eq!(&text[sp.remainder().unwrap()], " world");
     }
 
     #[test]
     fn multi_comment() {
         let text = " //com1\n//com2 \n  //com3\n  hello world";
-        let result = parse_token(&text);
-        assert_eq!(&text[result.token.unwrap()], "hello");
-        assert_eq!(&text[result.remainder.unwrap()], " world");
+        let mut sp = StrProcessor::new(&text);
+        assert_eq!(&text[sp.consume_token().unwrap()], "hello");
+        assert_eq!(&text[sp.remainder().unwrap()], " world");
     }
 
     #[test]
     fn special() {
         let text = "  {hello world";
-        let result = parse_token(&text);
-        assert_eq!(&text[result.token.unwrap()], "{");
-        assert_eq!(&text[result.remainder.unwrap()], "hello world");
+        let mut sp = StrProcessor::new(&text);
+        assert_eq!(&text[sp.consume_token().unwrap()], "{");
+        assert_eq!(&text[sp.remainder().unwrap()], "hello world");
     }
 
     #[test]
     fn quoted() {
         let text = "  \"hello world\"  abc";
-        let result = parse_token(&text);
-        assert_eq!(&text[result.token.unwrap()], "hello world");
-        assert_eq!(&text[result.remainder.unwrap()], "  abc");
+        let mut sp = StrProcessor::new(&text);
+        assert_eq!(&text[sp.consume_token().unwrap()], "hello world");
+        assert_eq!(&text[sp.remainder().unwrap()], "  abc");
+    }
+
+    #[test]
+    fn comment_no_token() {
+        let text = "// comment only\n  ";
+        let mut sp = StrProcessor::new(&text);
+        assert!(sp.consume_token().is_none());
+        assert!(sp.remainder().is_none());
     }
 }
