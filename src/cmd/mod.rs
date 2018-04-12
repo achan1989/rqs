@@ -20,9 +20,182 @@
 
 //! Things related to commands.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
+use failure::Error;
+
 use util;
+
+
+/// Handler functions for commands must be of this type.
+pub type CommandHandler = fn(Command, CmdSource) -> Result<(), Error>;
+
+/// A placeholder command handler function. Allows the program to compile, but
+/// causes a panic when called.
+pub fn dummy_command_handler_fn(_command: Command, _source: CmdSource)
+    -> Result<(), Error>
+{
+    unimplemented!("this handler function has not been implemented");
+}
+
+/// Where did a command come from?
+#[derive(Debug, PartialEq)]
+pub enum CmdSource {
+    /// From a client.
+    Client,
+    /// From the command buffer.
+    CmdBuffer,
+}
+
+/// The `CommandCenter` is a combination of the original Quake implementation's:
+///
+/// * Command buffer, which holds incoming commands (in the form of text) from
+///   script files, remote clients, stdin, keybindings, etc.
+/// * "Command registry", which tracks the valid commands and their associated
+///   handler functions.
+///
+/// To execute a command in the command buffer, a line of text (`\n` or `;`
+/// terminated) is removed from the buffer. It is tokenised into command and
+/// argument parts, and an appropriate handler function is looked for. If
+/// found, the handler function is called with the arguments.
+///
+/// Alternatively, another part of the engine can make the `CommandCenter`
+/// execute a command directly. This works exactly like executing a command in
+/// the command buffer, only without the buffer :)
+pub struct CommandCenter {
+    /// The command buffer.
+    cmd_text: String,
+    /// The registered commands, and their handler functions.
+    commands: HashMap<String, CommandHandler>,
+    /// The aliases that have been created, and the text that they represent.
+    aliases: HashMap<String, String>,
+    /// Causes execution of the remainder of the command buffer to be delayed
+    /// until next frame.
+    wait: bool,
+}
+
+impl CommandCenter {
+    /// Create a new `CommandCenter`.
+    pub fn new() -> Self {
+        Self {
+            cmd_text: String::with_capacity(8192),
+            commands: HashMap::with_capacity(200),
+            aliases: HashMap::with_capacity(20),
+            wait: false,
+        }
+    }
+
+    /// Add text to the end of the command buffer.
+    pub fn add_text(&mut self, text: &str) {
+        // Don't care about limiting memory usage right now.
+        self.cmd_text.push_str(text);
+    }
+
+    /// Insert text at the beginning of the command buffer, before any
+    /// unexecuted commands.
+    ///
+    /// Useful when a command wants to issue other commands and have them
+    /// processed immediately.
+    pub fn insert_text(&mut self, text: &str) {
+        self.cmd_text.insert_str(0, text);
+    }
+
+    /// Remove lines of text from the command buffer and execute them.
+    ///
+    /// Stops once the buffer is empty, or aborts with an `Err` if a command
+    /// handler raises an error.
+    pub fn execute_buffer(&mut self) -> Result<(), Error> {
+        while !self.cmd_text.is_empty() {
+            // Find a `\n` or `;` line break.
+            let mut line = String::with_capacity(200);
+            let mut quotes = 0;
+            for c in self.cmd_text.chars() {
+                match c {
+                    '"' => quotes += 1,
+                    // Don't break if inside a quoted string.
+                    ';' if (quotes % 2 == 0) => break,
+                    '\n' => break,
+                    _ => (),
+                }
+
+                // Take everything except the terminating char.
+                line.push(c);
+            }
+
+            // Delete the line from the buffer and move remaining text down.
+            let len = line.len();
+            if len == self.cmd_text.len() {
+                // Hit the end of the text, no terminating char.
+                self.cmd_text.clear();
+            } else {
+                // Remove the line plus the terminating char.
+                self.cmd_text.drain(0..len+1);
+            }
+
+            self.execute_text(line, CmdSource::CmdBuffer)?;
+
+            if self.wait {
+                // Process the rest of the buffer in the next frame.
+                self.wait = false;
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Try to execute one complete line of a command.
+    pub fn execute_text(&mut self, text: String, source: CmdSource)
+        -> Result<(), Error>
+    {
+        let command = Command::tokenise(text);
+        if let None = command {
+            return Ok(());
+        }
+        let command = command.unwrap();
+
+        if let Some(handler) = self.commands.get(command.name()) {
+            return handler(command, source);
+        }
+
+        if let Some(text) = self.aliases.get(command.name()) {
+            self.cmd_text.insert_str(0, text);
+            return Ok(());
+        }
+
+        unimplemented!("attempt to execute command as cvar");
+    }
+
+    /// Register a command name, to be handled by the given handler.
+    ///
+    /// Panics if the name has been registered already, or if the name clashes
+    /// with the name of a cvar.
+    pub fn register_command(&mut self, cmd_name: &str, handler: CommandHandler)
+    {
+        // Fail if the command is a variable name.
+        unimplemented!("check if a cvar exists with this command's name");
+
+        if let Some(_) = self.commands.get(cmd_name) {
+            panic!("Can't add the command, it already exists: {}", cmd_name);
+        }
+
+        self.commands.insert(cmd_name.into(), handler);
+    }
+
+    /// Is there a registered command with this name?
+    pub fn is_command_registered(&self, cmd_name: &str) -> bool {
+        match self.commands.get(cmd_name) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Try to find a command name that matches the given partial string.
+    pub fn complete_command(&self, partial: &str) -> Option<&String> {
+        self.commands.keys().find(|name| name.starts_with(partial))
+    }
+}
 
 
 /// Represents some received command input, possibly with arguments, tokenised
