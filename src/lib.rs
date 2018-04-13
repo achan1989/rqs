@@ -12,6 +12,7 @@ pub mod defs;
 pub mod parms;
 pub use parms::Parms;
 pub mod fs;
+pub mod state;
 #[cfg(test)]
 mod test_common;
 pub mod try_from_temp;
