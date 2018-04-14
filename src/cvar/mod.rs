@@ -19,10 +19,12 @@
 
 //! Things related to cvars (console variables).
 
+use std::cell::{Ref, RefMut, RefCell};
 use std::io;
 
 use failure::Error;
 
+use state::{GetCommands};
 use util;
 
 
@@ -30,27 +32,35 @@ use util;
 pub struct CvarManager {
     /// The cvars that have been registered.
     /// Stored in reverse priority order.
-    vars: Vec<Cvar>,
+    vars: RefCell<Vec<Cvar>>,
 }
 
 impl CvarManager {
     /// Create a new `CvarManager`.
     pub fn new() -> Self {
         Self {
-            vars: Vec::with_capacity(20),
+            vars: RefCell::new(Vec::with_capacity(20)),
         }
     }
 
     /// Get the cvar with the given name, if it exists.
-    pub fn find(&self, var_name: &str) -> Option<&Cvar> {
-        self.vars.iter().find(|cv| &cv.name == var_name)
+    pub fn find(&self, var_name: &str) -> Option<Ref<Cvar>> {
+        let vars = self.vars.borrow();
+        match vars.iter().position(|cv| cv.name == var_name) {
+            None => None,
+            Some(i) => Some(Ref::map(vars, |vars| &vars[i])),
+        }
     }
 
     /// Get the cvar with the given name, if it exists.
     ///
     /// The returned `Cvar` may be modified.
-    fn find_mut(&mut self, var_name: &str) -> Option<&mut Cvar> {
-        self.vars.iter_mut().find(|cv| &cv.name == var_name)
+    fn find_mut(&self, var_name: &str) -> Option<RefMut<Cvar>> {
+        let vars = self.vars.borrow_mut();
+        match vars.iter().position(|cv| &cv.name == var_name) {
+            None => None,
+            Some(i) => Some(RefMut::map(vars, |vars| &mut vars[i]))
+        }
     }
 
     /// Try to get the float value of the cvar with the given name.
@@ -67,29 +77,27 @@ impl CvarManager {
     /// Try to get the string value of the cvar with the given name.
     ///
     /// Returns `None` if that cvar is not defined.
-    pub fn variable_str(&self, var_name: &str) -> Option<&str> {
+    pub fn variable_str(&self, var_name: &str) -> Option<Ref<String>> {
         match self.find(var_name) {
             None => None,
-            Some(cv) => Some(&cv.string_val),
+            Some(rcv) => Some(Ref::map(rcv, |cv| &cv.string_val)),
         }
     }
 
     /// Attempts to match a partial variable name for command line completion.
     ///
     /// Returns `None` if nothing fits.
-    pub fn complete_variable(&self, partial_name: &str) -> Option<&str>
+    pub fn complete_variable(&self, partial_name: &str) -> Option<Ref<String>>
     {
         if partial_name == "" {
             return None;
         }
 
         // Make sure to iterate in the proper order for this one.
-        let found =
-            self.vars.iter().rev()
-            .find(|cv| cv.name.starts_with(partial_name));
-        match found {
+        let vars = self.vars.borrow();
+        match vars.iter().rposition(|cv| cv.name.starts_with(partial_name)) {
             None => None,
-            Some(cv) => Some(&cv.name),
+            Some(i) => Some(Ref::map(vars, |vars| &vars[i].name)),
         }
     }
 
@@ -101,9 +109,9 @@ impl CvarManager {
     /// # Panics
     ///
     /// Panics if the given cvar is not defined.
-    pub fn set_string(&mut self, var_name: &str, value: &str) {
+    pub fn set_string(&self, var_name: &str, value: &str) {
         // Apparently this is a logic error, and should never happen.
-        let cv = self.find_mut(var_name).expect(
+        let mut cv = self.find_mut(var_name).expect(
             &format!("cvar {} not found", var_name));
 
         let changed = cv.string_val != value;
@@ -122,7 +130,7 @@ impl CvarManager {
     /// Set the float value of the cvar with the given name.
     ///
     /// Under the hood, formats the value as a string then calls `set_string`.
-    pub fn set_float(&mut self, var_name: &str, value: f32) {
+    pub fn set_float(&self, var_name: &str, value: f32) {
         let str_val = format!("{}", value);
         self.set_string(var_name, &str_val);
     }
@@ -135,19 +143,24 @@ impl CvarManager {
     ///
     /// This differs from the original Quake implementation, which would just
     /// print an error message and continue.
-    pub fn register(&mut self, builder: CvarBuilder) {
+    pub fn register<S: GetCommands>(&self, builder: CvarBuilder, state: &S) {
         if let Some(_) = self.find(&builder.name) {
-            panic!("Can't register cvar {}, it's already defined",
+            panic!("Can't register cvar '{}', it's already defined",
                    builder.name);
         }
 
-        unimplemented!("TODO: check for name collision with a command");
+        if state.commands().is_command_registered(&builder.name) {
+            panic!(
+                "Can't register cvar '{}', it clashes with a command of \
+                the same name",
+                builder.name);
+        }
 
         let value = match util::atof(&builder.string_val) {
             Some(f) => f,
             None => 0.0,
         };
-        self.vars.push(
+        self.vars.borrow_mut().push(
             Cvar {
                 name: builder.name,
                 string_val: builder.string_val,
@@ -163,7 +176,7 @@ impl CvarManager {
     /// where the `archive` field is `true`.
     pub fn write_cvars<W: io::Write>(&self, writer: &mut W) -> Result<(), Error>
     {
-        for cv in self.vars.iter().rev().filter(|cv| cv.archive) {
+        for cv in self.vars.borrow().iter().rev().filter(|cv| cv.archive) {
             write!(writer, "{} \"{}\"\n", cv.name, cv.string_val)?;
         }
         Ok(())
@@ -264,11 +277,13 @@ impl Cvar {
 ///
 /// ```
 /// use rqs::cvar::{Cvar, CvarManager};
+/// use rqs::state::State;
 ///
-/// fn module_init(cvm: &mut CvarManager) {
+/// fn module_init(cvm: &mut CvarManager, state: &State) {
 ///     cvm.register(
 ///         Cvar::define("cl_thingy", "123")
-///         .archive()
+///               .archive(),
+///         state
 ///     );
 /// }
 /// ```
@@ -312,36 +327,55 @@ impl CvarBuilder {
 #[cfg(test)]
 mod tests_cvar_stuff {
     use super::*;
+    use cmd::CommandCenter;
 
-    fn basic_cvar_manager() -> CvarManager {
-        let mut cvm = CvarManager::new();
-        cvm.register(
-            Cvar::define("cv_foo", "hello"));
-        cvm.register(
+    struct MockState {
+        cvars: CvarManager,
+        commands: CommandCenter,
+    }
+
+    impl GetCommands for MockState {
+        fn commands(&self) -> &CommandCenter {
+            &self.commands
+        }
+    }
+
+    fn setup_state() -> MockState {
+        let state = MockState {
+            cvars: CvarManager::new(),
+            commands: CommandCenter::new(),
+        };
+
+        state.cvars.register(
+            Cvar::define("cv_foo", "hello"),
+            &state);
+        state.cvars.register(
             Cvar::define("cv_bar", "123.0")
-            .archive());
-        cvm
+                  .archive(),
+            &state);
+        state
     }
 
     #[test]
     fn basic() {
-        let mut cvm = basic_cvar_manager();
+        let state = setup_state();
+        let cvars = &state.cvars;
 
-        assert_eq!(cvm.variable_str("cv_foo"), Some("hello"));
-        assert_eq!(cvm.variable_value("cv_foo"), None);
-        assert_eq!(cvm.variable_str("cv_bar"), Some("123.0"));
-        assert_eq!(cvm.variable_value("cv_bar"), Some(123.0));
+        assert_eq!(*cvars.variable_str("cv_foo").unwrap(), "hello");
+        assert!(cvars.variable_value("cv_foo").is_none());
+        assert_eq!(*cvars.variable_str("cv_bar").unwrap(), "123.0");
+        assert_eq!(cvars.variable_value("cv_bar").unwrap(), 123.0);
 
-        if let None = cvm.find("cv_foo") {
+        if let None = cvars.find("cv_foo") {
             panic!("got None result for find('cv_foo')");
         }
-        if let Some(x) = cvm.find("potato") {
+        if let Some(x) = cvars.find("potato") {
             panic!("expected None result for find('potato'), got {:?}", x);
         }
 
-        cvm.set_string("cv_foo", "world");
-        assert_eq!(cvm.variable_str("cv_foo"), Some("world"));
-        cvm.set_float("cv_bar", -14.83);
-        assert_eq!(cvm.variable_value("cv_bar"), Some(-14.83));
+        cvars.set_string("cv_foo", "world");
+        assert_eq!(*cvars.variable_str("cv_foo").unwrap(), "world");
+        cvars.set_float("cv_bar", -14.83);
+        assert_eq!(cvars.variable_value("cv_bar").unwrap(), -14.83);
     }
 }
