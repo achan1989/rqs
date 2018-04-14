@@ -24,6 +24,7 @@ use std::io;
 
 use failure::Error;
 
+use cmd::Command;
 use state::{GetCommands};
 use util;
 
@@ -168,6 +169,22 @@ impl CvarManager {
                 archive: builder.archive,
                 server: builder.server,
             });
+    }
+
+    /// Try to handle variable inspection and changing from the console.
+    ///
+    /// Returns `true` if the command was a variable reference that was handled
+    /// (inspected or changed).
+    pub fn handle_console(&self, command: Command) -> bool {
+        if let None = self.find(command.name()) {
+            return false;
+        }
+
+        match command.args() {
+            None => unimplemented!("print cvar to console"),
+            Some(args) => self.set_string(command.name(), &args[0])
+        }
+        true
     }
 
     /// Serialise the `Cvar`s that need archiving.

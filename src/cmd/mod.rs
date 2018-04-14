@@ -20,11 +20,13 @@
 
 //! Things related to commands.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 
 use failure::Error;
 
+use state::{State, GetCvars};
 use util;
 
 
@@ -65,31 +67,31 @@ pub enum CmdSource {
 /// the command buffer, only without the buffer :)
 pub struct CommandCenter {
     /// The command buffer.
-    cmd_text: String,
+    cmd_text: RefCell<String>,
     /// The registered commands, and their handler functions.
-    commands: HashMap<String, CommandHandler>,
+    commands: RefCell<HashMap<String, CommandHandler>>,
     /// The aliases that have been created, and the text that they represent.
     aliases: HashMap<String, String>,
     /// Causes execution of the remainder of the command buffer to be delayed
     /// until next frame.
-    wait: bool,
+    wait: Cell<bool>,
 }
 
 impl CommandCenter {
     /// Create a new `CommandCenter`.
     pub fn new() -> Self {
         Self {
-            cmd_text: String::with_capacity(8192),
-            commands: HashMap::with_capacity(200),
+            cmd_text: RefCell::new(String::with_capacity(8192)),
+            commands: RefCell::new(HashMap::with_capacity(200)),
             aliases: HashMap::with_capacity(20),
-            wait: false,
+            wait: Cell::new(false),
         }
     }
 
     /// Add text to the end of the command buffer.
-    pub fn add_text(&mut self, text: &str) {
+    pub fn add_text(&self, text: &str) {
         // Don't care about limiting memory usage right now.
-        self.cmd_text.push_str(text);
+        self.cmd_text.borrow_mut().push_str(text);
     }
 
     /// Insert text at the beginning of the command buffer, before any
@@ -97,47 +99,60 @@ impl CommandCenter {
     ///
     /// Useful when a command wants to issue other commands and have them
     /// processed immediately.
-    pub fn insert_text(&mut self, text: &str) {
-        self.cmd_text.insert_str(0, text);
+    pub fn insert_text(&self, text: &str) {
+        self.cmd_text.borrow_mut().insert_str(0, text);
     }
 
     /// Remove lines of text from the command buffer and execute them.
     ///
     /// Stops once the buffer is empty, or aborts with an `Err` if a command
     /// handler raises an error.
-    pub fn execute_buffer(&mut self) -> Result<(), Error> {
-        while !self.cmd_text.is_empty() {
-            // Find a `\n` or `;` line break.
-            let mut line = String::with_capacity(200);
-            let mut quotes = 0;
-            for c in self.cmd_text.chars() {
-                match c {
-                    '"' => quotes += 1,
-                    // Don't break if inside a quoted string.
-                    ';' if (quotes % 2 == 0) => break,
-                    '\n' => break,
-                    _ => (),
+    pub fn execute_buffer(&self, state: &State) -> Result<(), Error> {
+        loop {
+            // Remove a line of text from the buffer. Must release ownership
+            // of the buffer once this is done...
+            let line = {
+                let mut cmd_text = self.cmd_text.borrow_mut();
+                if cmd_text.is_empty() {
+                    break;
                 }
 
-                // Take everything except the terminating char.
-                line.push(c);
-            }
+                // Find a `\n` or `;` line break.
+                let mut line = String::with_capacity(200);
+                let mut quotes = 0;
+                for c in cmd_text.chars() {
+                    match c {
+                        '"' => quotes += 1,
+                        // Don't break if inside a quoted string.
+                        ';' if (quotes % 2 == 0) => break,
+                        '\n' => break,
+                        _ => (),
+                    }
 
-            // Delete the line from the buffer and move remaining text down.
-            let len = line.len();
-            if len == self.cmd_text.len() {
-                // Hit the end of the text, no terminating char.
-                self.cmd_text.clear();
-            } else {
-                // Remove the line plus the terminating char.
-                self.cmd_text.drain(0..len+1);
-            }
+                    // Take everything except the terminating char.
+                    line.push(c);
+                }
 
-            self.execute_text(line, CmdSource::CmdBuffer)?;
+                // Delete the line from the buffer and move remaining text down.
+                let len = line.len();
+                if len == cmd_text.len() {
+                    // Hit the end of the text, no terminating char.
+                    cmd_text.clear();
+                } else {
+                    // Remove the line plus the terminating char.
+                    cmd_text.drain(0..len+1);
+                }
 
-            if self.wait {
+                line
+            };
+
+            // ...because we might want to add things to the buffer when a
+            // command is executed.
+            self.execute_text(line, CmdSource::CmdBuffer, state)?;
+
+            if self.wait.get() {
                 // Process the rest of the buffer in the next frame.
-                self.wait = false;
+                self.wait.set(false);
                 break;
             }
         }
@@ -146,7 +161,7 @@ impl CommandCenter {
     }
 
     /// Try to execute one complete line of a command.
-    pub fn execute_text(&mut self, text: String, source: CmdSource)
+    pub fn execute_text(&self, text: String, source: CmdSource, state: &State)
         -> Result<(), Error>
     {
         let command = Command::tokenise(text);
@@ -155,45 +170,57 @@ impl CommandCenter {
         }
         let command = command.unwrap();
 
-        if let Some(handler) = self.commands.get(command.name()) {
+        if let Some(handler) = self.commands.borrow().get(command.name()) {
             return handler(command, source);
         }
 
         if let Some(text) = self.aliases.get(command.name()) {
-            self.cmd_text.insert_str(0, text);
+            self.insert_text(text);
             return Ok(());
         }
 
-        unimplemented!("attempt to execute command as cvar");
+        if !state.cvars().handle_console(command) {
+            unimplemented!("print 'unknown command' to console");
+        }
+
+        Ok(())
     }
 
     /// Register a command name, to be handled by the given handler.
     ///
     /// Panics if the name has been registered already, or if the name clashes
     /// with the name of a cvar.
-    pub fn register_command(&mut self, cmd_name: &str, handler: CommandHandler)
+    pub fn register_command(&self, cmd_name: &str, handler: CommandHandler, state: &State)
     {
-        // Fail if the command is a variable name.
-        unimplemented!("check if a cvar exists with this command's name");
+        if let Some(_) = state.cvars().find(cmd_name) {
+            panic!(
+                "Can't register command '{}', it clashes with a cvar of the \
+                same name", cmd_name);
+        }
 
-        if let Some(_) = self.commands.get(cmd_name) {
+        let mut commands = self.commands.borrow_mut();
+        if let Some(_) = commands.get(cmd_name) {
             panic!("Can't add the command, it already exists: {}", cmd_name);
         }
 
-        self.commands.insert(cmd_name.into(), handler);
+        commands.insert(cmd_name.into(), handler);
     }
 
     /// Is there a registered command with this name?
     pub fn is_command_registered(&self, cmd_name: &str) -> bool {
-        match self.commands.get(cmd_name) {
+        match self.commands.borrow().get(cmd_name) {
             Some(_) => true,
             None => false,
         }
     }
 
     /// Try to find a command name that matches the given partial string.
-    pub fn complete_command(&self, partial: &str) -> Option<&String> {
-        self.commands.keys().find(|name| name.starts_with(partial))
+    pub fn complete_command(&self, partial: &str) -> Option<String> {
+        let commands = self.commands.borrow();
+        match commands.keys().find(|name| name.starts_with(partial)) {
+            None => None,
+            Some(name) => Some(name.clone())
+        }
     }
 }
 
@@ -285,5 +312,47 @@ mod tests_command {
         let cmd = Command::tokenise("kill humans --all".to_string()).unwrap();
         assert_eq!(cmd.name(), "kill");
         assert_eq!(cmd.args().unwrap(), &["humans", "--all"]);
+    }
+}
+
+#[cfg(test)]
+mod tests_command_center {
+    use super::*;
+    use cvar::CvarManager;
+
+    thread_local!( static FOO_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new()));
+
+    fn foo_handler(cmd: Command, source: CmdSource)
+        -> Result<(), Error>
+    {
+        FOO_DATA.with(|data| {
+            data.borrow_mut().push(cmd.args().unwrap()[0].clone())
+        });
+        Ok(())
+    }
+
+    fn reset_foo_handler() {
+        FOO_DATA.with(|data| {
+            data.borrow_mut().clear()
+        });
+    }
+
+    fn setup_state() -> State {
+        reset_foo_handler();
+        State {
+            cvars: CvarManager::new(),
+            commands: CommandCenter::new(),
+        }
+    }
+
+    #[test]
+    fn basic() {
+        let mut state = setup_state();
+        state.commands.register_command("foo", foo_handler, &state);
+        state.commands.add_text("foo 123\n");
+        state.commands.execute_buffer(&state).unwrap();
+        FOO_DATA.with(|data| {
+            assert_eq!(&data.borrow()[..], &["123"]);
+        });
     }
 }
