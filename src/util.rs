@@ -222,6 +222,18 @@ impl<'a> StrProcessor<'a> {
         }
     }
 
+    /// Move past any characters at and beyond the current location, until a
+    /// `+` is encountered.
+    pub fn skip_to_command(&mut self) {
+        loop {
+            match self.str.get(self.i..self.i+1) {
+                None => break,
+                Some("+") => break,
+                Some(_) => self.i += 1,
+            }
+        }
+    }
+
     /// Move past a `//` comment, if one exists at the current location.
     ///
     /// A comment ends when a `\n` character, or the end of the string, is
@@ -370,6 +382,43 @@ impl<'a> StrProcessor<'a> {
         }
 
         Some(start..self.i)
+    }
+
+    /// Try to move past and return a command sequence at the current location.
+    ///
+    /// A command starts with a `+`, and continues until a `-` or another `+`.
+    /// E.g. `+prog jctest.qp +cmd amlev1` is two command sequences.
+    ///
+    /// Returns `None` if there is no command sequence at the current location,
+    /// or if the `StrProcessor` is at the end of the string. Otherwise returns
+    /// a [`Range`] within the original string.
+    ///
+    /// # Note
+    ///
+    /// This is expected to be used to parse command sequences from the command
+    /// line arguments that Quake was started with. As such, the usual halting
+    /// at `\n` does not apply.
+    pub fn consume_command(&mut self) -> Option<Range<usize>> {
+        if let Some("+") = self.str.get(self.i..self.i+1) {
+            self.i += 1;
+        } else {
+            return None;
+        }
+
+        let start = self.i;
+        loop {
+            match self.str.get(self.i..self.i+1) {
+                None => break,
+                Some("+") | Some("-") => break,
+                Some(_) => self.i += 1,
+            }
+        }
+
+        if start == self.i {
+            None
+        } else {
+            Some(start..self.i)
+        }
     }
 
     /// Try to move past and return the next token at or after the current
@@ -979,6 +1028,44 @@ mod tests_str_processor {
             let mut sp = StrProcessor::new(&text);
             assert_eq!(&text[sp.consume_normal().unwrap()], "\"foo");
             assert_eq!(&text[sp.remainder().unwrap()], " bar\" baz");
+        }
+    }
+
+    #[test]
+    fn commands() {
+        // Unbroken commands surrounded by non-commands.
+        {
+            let text = "foo +cmd1 arg1 +cmd2 arg2 -bar";
+            let mut sp = StrProcessor::new(&text);
+            assert!(sp.consume_command().is_none());
+
+            sp.skip_to_command();
+            assert_eq!(&text[sp.consume_command().unwrap()], "cmd1 arg1 ");
+
+            sp.skip_to_command();
+            assert_eq!(&text[sp.consume_command().unwrap()], "cmd2 arg2 ");
+            assert_eq!(&text[sp.remainder().unwrap()], "-bar");
+            assert!(sp.consume_command().is_none());
+            assert_eq!(&text[sp.remainder().unwrap()], "-bar");
+
+            sp.skip_to_command();
+            assert!(sp.reached_end());
+            assert!(sp.consume_command().is_none());
+        }
+
+        // Broken commands.
+        {
+            let text = "+cmd1 arg1 -bar baz +cmd2 arg2";
+            let mut sp = StrProcessor::new(&text);
+
+            sp.skip_to_command();
+            assert_eq!(&text[sp.consume_command().unwrap()], "cmd1 arg1 ");
+            assert_eq!(&text[sp.remainder().unwrap()], "-bar baz +cmd2 arg2");
+
+            sp.skip_to_command();
+            assert_eq!(&text[sp.consume_command().unwrap()], "cmd2 arg2");
+            assert!(sp.reached_end());
+            assert!(sp.consume_command().is_none());
         }
     }
 }
