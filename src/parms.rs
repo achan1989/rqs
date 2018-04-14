@@ -229,6 +229,11 @@ impl Parms {
             }
         }
     }
+
+    /// Get the command line args that Quake was started with.
+    pub fn args(&self) -> &[String] {
+        &self.argv
+    }
 }
 
 

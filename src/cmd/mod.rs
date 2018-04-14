@@ -26,12 +26,12 @@ use std::ops::Range;
 
 use failure::Error;
 
-use state::{State, GetCvars};
+use state::{State, GetCommands, GetCvars, GetParms};
 use util;
 
 
 /// Handler functions for commands must be of this type.
-pub type CommandHandler = fn(Command, CmdSource) -> Result<(), Error>;
+pub type CommandHandler = fn(Command, CmdSource, &State) -> Result<(), Error>;
 
 /// A placeholder command handler function. Allows the program to compile, but
 /// causes a panic when called.
@@ -86,6 +86,11 @@ impl CommandCenter {
             aliases: HashMap::with_capacity(20),
             wait: Cell::new(false),
         }
+    }
+
+    /// Perform one-time initialization.
+    pub fn init(&self, state: &State) {
+        self.register_command("stuffcmds", Self::stuffcmds_handler, state);
     }
 
     /// Add text to the end of the command buffer.
@@ -171,7 +176,7 @@ impl CommandCenter {
         let command = command.unwrap();
 
         if let Some(handler) = self.commands.borrow().get(command.name()) {
-            return handler(command, source);
+            return handler(command, source, state);
         }
 
         if let Some(text) = self.aliases.get(command.name()) {
@@ -221,6 +226,49 @@ impl CommandCenter {
             None => None,
             Some(name) => Some(name.clone())
         }
+    }
+
+    // Handler functions for commands related to the CommandCenter.
+
+    /// Add command line parameters as script statements.
+    ///
+    /// Commands lead with a `+`, and continue until a `-` or another `+`
+    ///
+    /// ```text
+    /// quake +prog jctest.qp +cmd amlev1
+    /// quake -nosound +cmd amlev1
+    /// ```
+    fn stuffcmds_handler(cmd: Command, _source: CmdSource, state: &State)
+        -> Result<(), Error>
+    {
+        if let Some(_) = cmd.args() {
+            unimplemented!("stuffcmds help in console, return Ok");
+        }
+
+        let args = state.parms().args();
+        if args.len() == 0 {
+            return Ok(());
+        }
+        // Build the combined string to parse from.
+        let text = args.join(" ");
+        let mut build = String::with_capacity(text.len());
+
+        let mut sp = util::StrProcessor::new(&text);
+        loop {
+            sp.skip_to_command();
+            match sp.consume_command() {
+                None => break,
+                Some(range) => {
+                    build.push_str(&text[range]);
+                    build.push_str("\n");
+                },
+            }
+        }
+
+        if !build.is_empty() {
+            state.commands().insert_text(&build);
+        }
+        Ok(())
     }
 }
 
@@ -319,10 +367,11 @@ mod tests_command {
 mod tests_command_center {
     use super::*;
     use cvar::CvarManager;
+    use parms::Parms;
 
     thread_local!( static FOO_DATA: RefCell<Vec<String>> = RefCell::new(Vec::new()));
 
-    fn foo_handler(cmd: Command, source: CmdSource)
+    fn foo_handler(cmd: Command, source: CmdSource, state: &State)
         -> Result<(), Error>
     {
         FOO_DATA.with(|data| {
@@ -339,10 +388,15 @@ mod tests_command_center {
 
     fn setup_state() -> State {
         reset_foo_handler();
-        State {
+        let state = State {
             cvars: CvarManager::new(),
             commands: CommandCenter::new(),
-        }
+            parms: Parms::new(
+                vec!("-nosound".into(), "+cmd".into(), "amlev1".into()),
+                "cwd".into()),
+        };
+        state.commands.init(&state);
+        state
     }
 
     #[test]
@@ -354,5 +408,12 @@ mod tests_command_center {
         FOO_DATA.with(|data| {
             assert_eq!(&data.borrow()[..], &["123"]);
         });
+    }
+
+    #[test]
+    fn stuffcmds() {
+        let mut state = setup_state();
+        state.commands.execute_text("stuffcmds\n".into(), CmdSource::CmdBuffer, &state);
+        assert_eq!(*state.commands.cmd_text.borrow(), "cmd amlev1\n");
     }
 }

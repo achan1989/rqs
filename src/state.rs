@@ -4,6 +4,7 @@
 
 use cmd::CommandCenter;
 use cvar::CvarManager;
+use parms::Parms;
 
 
 /// Holds all of the game state.
@@ -13,6 +14,7 @@ use cvar::CvarManager;
 pub struct State {
     pub cvars: CvarManager,
     pub commands: CommandCenter,
+    pub parms: Parms,
 }
 
 impl GetCvars for State {
@@ -27,6 +29,12 @@ impl GetCommands for State {
     }
 }
 
+impl GetParms for State {
+    fn parms(&self) -> &Parms {
+        &self.parms
+    }
+}
+
 
 pub trait GetCvars {
     fn cvars(&self) -> &CvarManager;
@@ -34,4 +42,8 @@ pub trait GetCvars {
 
 pub trait GetCommands {
     fn commands(&self) -> &CommandCenter;
+}
+
+pub trait GetParms {
+    fn parms(&self) -> &Parms;
 }
